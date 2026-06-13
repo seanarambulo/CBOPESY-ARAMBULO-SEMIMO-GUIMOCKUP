@@ -16,6 +16,9 @@ struct DummyProcess {
     ProcessState state;
     float cpuUsage;
     float memUsage;
+    int core;
+    int currentLine;
+    int totalLines;
 };
 
 class TaskManagerUI : public AWindow {
@@ -26,6 +29,12 @@ public:
 private:
     void drawPerformanceTab();
     void drawProcessesTab();
+    
+    void drawRunningTab();
+    void drawWaitingTab();
+    void drawFinishedTab();
+    
+    void drawHardwareHeader();
     void updatePerformanceData();
     ImVec4 getStateColor(ProcessState state);
 

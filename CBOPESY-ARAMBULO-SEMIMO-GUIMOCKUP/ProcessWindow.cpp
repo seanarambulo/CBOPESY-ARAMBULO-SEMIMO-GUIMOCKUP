@@ -6,7 +6,7 @@ ProcessWindow::ProcessWindow() : AWindow("ProcessWindow"),
 }
 
 void ProcessWindow::draw() {
-    beginWindow();
+    if (!beginWindow()) return;
     
     ImGui::Text("Process Details");
     ImGui::Separator();

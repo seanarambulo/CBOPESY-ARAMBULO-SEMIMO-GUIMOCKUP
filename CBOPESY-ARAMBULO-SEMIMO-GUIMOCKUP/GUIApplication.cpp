@@ -4,15 +4,28 @@
 #include "imgui_impl_opengl3.h"
 #include <iostream>
 
+#ifdef _WIN32
+#pragma comment(lib, "opengl32.lib")
+#endif
+
 #include "UIConfig.h"
 #include "UIManager.h"
+#include "Desktop.h"
+#include "Taskbar.h"
 #include "TaskManagerUI.h"
-#include "BIOSBootWindow.h"
 #include "ProcessWindow.h"
+#include "SearchWindow.h"
+#include "BIOSBootWindow.h"
+#include "StartMenu.h"
 
 // Forward declare GLFW error callback
 static void glfw_error_callback(int error, const char* description) {
     std::cerr << "GLFW Error " << error << ": " << description << std::endl;
+}
+
+// Window close callback to prevent force exit
+static void window_close_callback(GLFWwindow* window) {
+    glfwSetWindowShouldClose(window, GLFW_FALSE);
 }
 
 GUIApplication::GUIApplication() : window(nullptr) {
@@ -23,7 +36,7 @@ GUIApplication::~GUIApplication() {
 }
 
 bool GUIApplication::initialize() {
-    // 1. OS Bootstrapping: Initialize GLFW
+    // Phase 1: Bootstrapping — hardware/window system setup
     glfwSetErrorCallback(glfw_error_callback);
     if (!glfwInit())
         return false;
@@ -36,120 +49,111 @@ bool GUIApplication::initialize() {
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 #else
-    const char* glsl_version = "#version 130";
+    const char* glsl_version = "#version 330";
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
 #endif
 
-    // Create window with graphics context
-    window = glfwCreateWindow(1280, 720, "OS Mockup", nullptr, nullptr);
+    window = glfwCreateWindow(1280, 720, "CSOPESY", nullptr, nullptr);
     if (window == nullptr)
         return false;
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1); // Enable vsync
 
-    // Setup Dear ImGui context
+    // Intercept the close button
+    glfwSetWindowCloseCallback(window, window_close_callback);
+
+    // Initialize Dear ImGui (equivalent to kernel entry point)
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO(); (void)io;
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // Enable Keyboard Controls
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;      // Enable Gamepad Controls
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+    
+    // Enable DPI awareness (Custom implementation using UIConfig)
 
-    // Setup Dear ImGui style
     ImGui::StyleColorsDark();
 
-    // Setup Platform/Renderer backends
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init(glsl_version);
 
-    setupImGui();
+    // Phase 2: Kernel Initialization — set up data structures
+    UIConfig::initialize();
+    UIManager::getInstance().initialize();
 
-    // 2. Kernel Initialization Phase: Register services
-    UIManager* uiManager = UIManager::getInstance();
-
-    desktop = std::make_shared<Desktop>();
-    taskbar = std::make_shared<Taskbar>();
-    
-    uiManager->registerWindow(desktop);
-    uiManager->registerWindow(taskbar);
-    uiManager->registerWindow(std::make_shared<TaskManagerUI>());
-    uiManager->registerWindow(std::make_shared<BIOSBootWindow>());
-    uiManager->registerWindow(std::make_shared<ProcessWindow>());
-
-    return true;
-}
-
-void GUIApplication::setupImGui() {
-    // Enable DPI awareness and load fonts
-    ImGuiIO& io = ImGui::GetIO();
-    
-    // In a real application, you might get the monitor width here
-    int windowWidth, windowHeight;
-    glfwGetWindowSize(window, &windowWidth, &windowHeight);
-    
-    UIConfig::getInstance()->initialize((float)windowWidth);
-    float scaleFactor = UIConfig::getInstance()->getScaleFactor();
-
-    // Set global scale
+    float scaleFactor = UIConfig::getScaleFactor();
     ImGui::GetStyle().ScaleAllSizes(scaleFactor);
     io.FontGlobalScale = scaleFactor;
 
-    // Here you would load fonts, e.g.:
-    // io.Fonts->AddFontFromFileTTF("path/to/font.ttf", 16.0f);
+    // Phase 3: Start System Services — launch core windows
+    auto desktop = std::make_shared<Desktop>();
+    auto taskbar = std::make_shared<Taskbar>();
+    auto taskMgr = std::make_shared<TaskManagerUI>();
+    auto processWindow = std::make_shared<ProcessWindow>();
+    auto searchWindow = std::make_shared<SearchWindow>();
+    auto biosWindow = std::make_shared<BIOSBootWindow>();
+    auto startMenu = std::make_shared<StartMenu>();
+    
+    UIManager::getInstance().registerWindow("desktop", desktop);
+    UIManager::getInstance().registerWindow("taskbar", taskbar);
+    UIManager::getInstance().registerWindow("taskManager", taskMgr);
+    UIManager::getInstance().registerWindow("process", processWindow);
+    UIManager::getInstance().registerWindow("search", searchWindow);
+    UIManager::getInstance().registerWindow("bios", biosWindow);
+    UIManager::getInstance().registerWindow("startMenu", startMenu);
+
+    // Initial state: hide desktop and taskbar, show BIOS
+    desktop->hide();
+    taskbar->hide();
+    startMenu->hide();
+    biosWindow->show();
+
+    return true;
 }
 
 void GUIApplication::run() {
     ImGuiIO& io = ImGui::GetIO();
     ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
 
-    // The OS infinite main loop
-    while (!glfwWindowShouldClose(window)) {
-        // 1. Poll Events
+    // Phase 4: Enter Main Loop — handle events, dispatch, I/O
+    while (!glfwWindowShouldClose(window) && !UIManager::getInstance().isApplicationClosing()) {
+        // Handle interrupts / poll for input events
         glfwPollEvents();
 
-        // 2. Start the frame
+        // Dispatch "processes" — render all active windows
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-        // 3. Process Logic
+        // Update application logic
         updateLogic();
 
-        // 4. Render UI
+        // Render all UI components
         renderFrame();
 
-        // 5. Swap Buffers
+        // Flush output — present the rendered frame
         ImGui::Render();
         int display_w, display_h;
         glfwGetFramebufferSize(window, &display_w, &display_h);
         glViewport(0, 0, display_w, display_h);
         glClearColor(clear_color.x * clear_color.w, clear_color.y * clear_color.w, clear_color.z * clear_color.w, clear_color.w);
         glClear(GL_COLOR_BUFFER_BIT);
+        
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-
         glfwSwapBuffers(window);
     }
 }
 
 void GUIApplication::updateLogic() {
-    // Update background process states
-    // Handle DPI scaling changes on resize
-    int windowWidth, windowHeight;
-    glfwGetWindowSize(window, &windowWidth, &windowHeight);
-    UIConfig::getInstance()->initialize((float)windowWidth);
+    UIManager::getInstance().updateAllWindows();
 }
 
 void GUIApplication::renderFrame() {
-    // Explicitly draw background services first
-    desktop->draw();
-    taskbar->draw();
-    
-    // Draw all user-opened windows floating above
-    UIManager::getInstance()->renderAllWindows();
+    UIManager::getInstance().renderAllWindows();
 }
 
 void GUIApplication::shutdown() {
-    // Graceful termination
+    // Phase 5: Shutdown and Cleanup
     if (window != nullptr) {
         ImGui_ImplOpenGL3_Shutdown();
         ImGui_ImplGlfw_Shutdown();

@@ -3,29 +3,27 @@
 #include "imgui.h"
 
 class AWindow {
-protected:
-    std::string windowName;
-    bool isVisible;
-
 public:
     AWindow(const std::string& name) : windowName(name), isVisible(false) {}
     virtual ~AWindow() = default;
 
-    std::string getName() const { return windowName; }
-    bool getVisibility() const { return isVisible; }
-    void setVisibility(bool visible) { isVisible = visible; }
+    virtual void draw() = 0; // Pure virtual: subclasses must implement
 
-    virtual void draw() = 0;
+    void show() { isVisible = true; }
+    void hide() { isVisible = false; }
+    bool isShown() const { return isVisible; }
 
-    void beginWindow() {
-        if (isVisible) {
-            ImGui::Begin(windowName.c_str(), &isVisible);
-        }
+protected:
+    bool beginWindow(ImGuiWindowFlags flags = 0) {
+        if (!isVisible) return false;
+        ImGui::Begin(windowName.c_str(), &isVisible, flags);
+        return true;
     }
 
     void endWindow() {
-        if (isVisible) {
-            ImGui::End();
-        }
+        ImGui::End();
     }
+
+    std::string windowName;
+    bool isVisible;
 };

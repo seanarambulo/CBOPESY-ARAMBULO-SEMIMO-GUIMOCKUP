@@ -1,14 +1,6 @@
 #pragma once
 #include "AWindow.h"
-
-enum class BootPhase {
-    INIT,
-    CPU_CHECK,
-    RAM_CHECK,
-    DISK_CHECK,
-    LOADING_OS,
-    DONE
-};
+#include <chrono>
 
 class BIOSBootWindow : public AWindow {
 public:
@@ -16,7 +8,6 @@ public:
     void draw() override;
 
 private:
-    BootPhase currentPhase;
-    float phaseProgress;
-    void advanceBootSequence();
+    std::chrono::time_point<std::chrono::system_clock> startTime;
+    int ramCounter;
 };

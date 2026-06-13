@@ -2,7 +2,12 @@
 //
 
 #include <iostream>
+#include <chrono>
 #include "GUIApplication.h"
+
+#ifdef _WIN32
+#pragma comment(linker, "/SUBSYSTEM:windows /ENTRY:mainCRTStartup")
+#endif
 
 int main()
 {

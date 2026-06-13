@@ -1,3 +1,3 @@
 #include "UIConfig.h"
 
-UIConfig* UIConfig::instance = nullptr;
+float UIConfig::scaleFactor = 1.0f;

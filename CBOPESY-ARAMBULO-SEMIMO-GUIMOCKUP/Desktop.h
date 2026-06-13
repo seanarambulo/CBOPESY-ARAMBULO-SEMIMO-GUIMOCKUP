@@ -8,4 +8,6 @@ public:
 
 private:
     void drawClock();
+    unsigned int wallpaperTexture;
+    int texWidth, texHeight;
 };

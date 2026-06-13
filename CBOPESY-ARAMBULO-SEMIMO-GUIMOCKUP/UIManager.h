@@ -5,54 +5,25 @@
 #include "AWindow.h"
 
 class UIManager {
-private:
-    static UIManager* instance;
-    std::map<std::string, std::shared_ptr<AWindow>> windows;
-
-    UIManager() {}
-
 public:
-    static UIManager* getInstance() {
-        if (instance == nullptr) {
-            instance = new UIManager();
-        }
-        return instance;
-    }
+    static UIManager& getInstance();
 
-    void registerWindow(std::shared_ptr<AWindow> window) {
-        windows[window->getName()] = window;
-    }
+    void initialize();
+    void exitApplication();
+    bool isApplicationClosing() const;
 
-    void showWindow(const std::string& name) {
-        if (windows.find(name) != windows.end()) {
-            windows[name]->setVisibility(true);
-        }
-    }
+    void registerWindow(const std::string& name, std::shared_ptr<AWindow> window);
+    void showWindow(const std::string& name);
+    void hideWindow(const std::string& name);
+    void toggleWindow(const std::string& name);
 
-    void hideWindow(const std::string& name) {
-        if (windows.find(name) != windows.end()) {
-            windows[name]->setVisibility(false);
-        }
-    }
+    std::shared_ptr<AWindow> getWindow(const std::string& name);
 
-    void toggleWindow(const std::string& name) {
-        if (windows.find(name) != windows.end()) {
-            windows[name]->setVisibility(!windows[name]->getVisibility());
-        }
-    }
+    void updateAllWindows();
+    void renderAllWindows();
 
-    void renderAllWindows() {
-        for (auto const& [name, window] : windows) {
-            if (window->getVisibility()) {
-                window->draw();
-            }
-        }
-    }
-
-    std::shared_ptr<AWindow> getWindow(const std::string& name) {
-        if (windows.find(name) != windows.end()) {
-            return windows[name];
-        }
-        return nullptr;
-    }
+private:
+    UIManager(); // Private constructor
+    std::map<std::string, std::shared_ptr<AWindow>> windows;
+    bool bApplicationShouldClose;
 };
