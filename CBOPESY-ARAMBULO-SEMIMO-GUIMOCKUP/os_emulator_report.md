@@ -195,6 +195,20 @@ while (!glfwWindowShouldClose(window) && !UIManager::getInstance().isApplication
 }
 ```
 
+To fulfill the "dispatching processes" component of the main loop, the emulator relies on the `UIManager` singleton to iterate through all registered window objects. Only those actively marked as "shown" get their `draw()` methods executed, simulating process scheduling on a per-frame basis:
+
+```cpp
+// UIManager.cpp - inside renderAllWindows()
+// Triggered by GUIApplication::renderFrame() every tick
+void UIManager::renderAllWindows() {
+    for (auto& [name, window] : windows) {
+        if (window->isShown()) {
+            window->draw();
+        }
+    }
+}
+```
+
 During this phase, all active system services (like the Taskbar) are continuously redrawn. The Immediate-Mode GUI pattern requires these components to declare their structure and handle their own input polling every frame. For example, the `Taskbar` renders its application icons and listens for clicks simultaneously:
 
 ```cpp
@@ -238,14 +252,252 @@ The desktop-style OS is a mockup application engineered strictly in User Space u
 ### 1. Centralized Window Management
 Instead of system services, the architecture relies on the `UIManager`. It operates as a centralized Singleton that maintains an `std::unordered_map` of `AWindow` pointers. Interaction with elements, such as clicking a Taskbar icon, triggers `UIManager::getInstance().toggleWindow()` which updates the visibility state of application windows, effectively dictating what is rendered on the next immediate frame.
 
+```cpp
+// UIManager.cpp
+void UIManager::toggleWindow(const std::string& name) {
+    if (windows.find(name) != windows.end()) {
+        if (windows[name]->isShown()) {
+            windows[name]->hide();
+        } else {
+            windows[name]->show();
+        }
+    }
+}
+```
+
 ### 2. State-Based Boot Simulation
 The `BIOSBootWindow` simulates a hardware POST and kernel boot through elapsed time evaluation (`std::chrono::system_clock::now()`). As time passes, new blocks of text are progressively rendered to the screen. Once a specific threshold is reached (e.g., 27 seconds), the state machine programmatically hides the BIOS screen and reveals the `Desktop` and `Taskbar`, providing a seamless visual transition to the OS interface.
 
+```cpp
+// BIOSBootWindow.cpp - Progressive text rendering based on time
+if (elapsedSeconds > 5.5f) {
+    ImGui::TextColored(white, "SMART Failure Predicted on M.2 : CORTEX BRAIN CHIP V3");
+    ImGui::TextColored(white, "WARNING: Please back-up your memories and replace your brain chip.");
+}
+```
+
 ### 3. Immediate-Mode UI Architecture
 Because the application leverages Dear ImGui, the GUI paradigm is purely immediate-mode. Every visual element is redrawn entirely from scratch on every frame. Instead of maintaining persistent GUI objects in memory, the application structure defines layouts continuously inside each frame's execution loop (e.g., inside the `draw()` methods of `AWindow` subclasses).
+
+```cpp
+// StartMenu.cpp - Stateless UI layout and interaction
+// The entire structural layout and styling is reconstructed every frame.
+if (ImGui::Begin("StartMenuWindow", nullptr, flags)) {
+    ImGui::Columns(2, "StartMenuColumns", false);
+    
+    // Left Pane
+    ImGui::Text("Recent Apps");
+    ImGui::Separator();
+    
+    // No retained button object; drawn and evaluated for clicks inline
+    if (ImGui::Button("Command Prompt", ImVec2(-1, 0))) {
+        // Handle click event immediately
+    }
+    
+    ImGui::NextColumn();
+    
+    // Right Pane (System Actions)
+    // Styling is applied directly to the rendering pipeline and popped after
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.1f, 0.1f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1.0f, 0.2f, 0.2f, 1.0f));
+    
+    if (ImGui::Button("Shut down", ImVec2(-1, 0))) {
+        UIManager::getInstance().exitApplication();
+    }
+    
+    ImGui::PopStyleColor(2); // Must pop styling out of the immediate pipeline
+    ImGui::Columns(1);
+}
+ImGui::End();
+```
 
 ### 4. Data Mocking and Visualization
 The "processes" and "performance metrics" displayed within the interface are purely structural data models. 
 - The **Task Manager** stores predefined structures inside a `std::vector<DummyProcess>`. 
 - **Sorting Logic**: Interactions with table columns dispatch `std::sort()` against the vector based on the selected field (PID, Name, Core) and direction.
 - **Hardware Graphs**: Hardware utilization is visualized using `ImGui::PlotLines`. The memory and CPU values are not tied to real system calls; they are randomly shifted across an array every frame using `<cstdlib>` random generation to create the illusion of active telemetry.
+
+```cpp
+// TaskManagerUI.cpp - Data Mocking & Sorting Logic
+
+// 1. Faking hardware telemetry arrays via rotation and RNG
+void TaskManagerUI::updatePerformanceData() {
+    std::rotate(cpuHistory.begin(), cpuHistory.begin() + 1, cpuHistory.end());
+    std::rotate(memoryHistory.begin(), memoryHistory.begin() + 1, memoryHistory.end());
+    
+    cpuHistory.back() = 10.0f + (std::rand() % 20); 
+    memoryHistory.back() = 40.0f + (std::rand() % 10);
+}
+
+// 2. Rendering telemetry visually
+void TaskManagerUI::drawPerformanceTab() {
+    updatePerformanceData();
+    ImGui::PlotLines("##CPU", cpuHistory.data(), cpuHistory.size(), 0, nullptr, 0.0f, 100.0f, ImVec2(0, 80));
+    ImGui::PlotLines("##Memory", memoryHistory.data(), memoryHistory.size(), 0, nullptr, 0.0f, 100.0f, ImVec2(0, 80));
+}
+
+// 3. Dispatching table sorting based on ImGuiTableColumnSortSpecs
+static void sortProcesses(std::vector<DummyProcess>& processes, ImGuiTableSortSpecs* sorts_specs, TableType type) {
+    if (!sorts_specs || !sorts_specs->SpecsDirty || sorts_specs->SpecsCount == 0) return;
+
+    const ImGuiTableColumnSortSpecs* sort_spec = &sorts_specs->Specs[0];
+    
+    // Reorders the dummy struct vector based on active column click
+    std::sort(processes.begin(), processes.end(), [sort_spec, type](const DummyProcess& a, const DummyProcess& b) {
+        if (sort_spec->SortDirection == ImGuiSortDirection_Ascending) {
+            return compareDummyProcesses(a, b, sort_spec, type);
+        } else {
+            return compareDummyProcesses(b, a, sort_spec, type);
+        }
+    });
+    sorts_specs->SpecsDirty = false; // Reset dirty flag after sorting
+}
+```
+
+---
+
+## V. Component Breakdown: GUI Desktop Elements Design & Implementation
+
+The graphical desktop environment is constructed by compositing multiple borderless `ImGui` windows carefully anchored to specific screen coordinates. The following outlines how each `AWindow` inherited component operates within the emulator ecosystem:
+
+### 1. `Desktop`: The Immovable Background Anchor
+The `Desktop` acts as the root visual layer. To simulate a static wallpaper without interfering with traditional window dragging, it uses a stringent set of ImGui window flags to remove borders, disable resizing, and prevent it from being brought to the front. The background itself is drawn directly onto the low-level `ImDrawList`.
+
+```cpp
+// Desktop.cpp - inside draw()
+ImGui::SetNextWindowPos(ImVec2(0, 0));
+ImGui::SetNextWindowSize(io.DisplaySize);
+
+// Lock the window completely to act as a background canvas
+ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | 
+                         ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | 
+                         ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
+
+if (!beginWindow(flags)) return;
+
+// Directly inject a loaded texture or gradient via ImDrawList
+if (wallpaperTexture != 0) {
+    ImGui::GetWindowDrawList()->AddImage(
+        (void*)(intptr_t)wallpaperTexture,
+        ImVec2(0, 0), io.DisplaySize
+    );
+}
+```
+
+### 2. `StartMenu`: The Dynamic Menu Overlay
+The `StartMenu` demonstrates how dynamic, relative-positioned elements are constructed. It is specifically anchored to the bottom-left of the screen, just above the Taskbar. It utilizes `ImGui::Columns` to create a structured two-pane layout mimicking a classic OS menu.
+
+```cpp
+// StartMenu.cpp - inside draw()
+float scale = UIConfig::getScaleFactor();
+float taskbarHeight = 60.0f * scale;
+float startMenuWidth = 400.0f * scale;
+float startMenuHeight = 500.0f * scale;
+
+// Positioned strictly above the bottom taskbar
+ImGui::SetNextWindowPos(ImVec2(0, io.DisplaySize.y - taskbarHeight - startMenuHeight), ImGuiCond_Always);
+ImGui::SetNextWindowSize(ImVec2(startMenuWidth, startMenuHeight), ImGuiCond_Always);
+
+if (ImGui::Begin("StartMenuWindow", nullptr, flags)) {
+    // Utilize columns to create the classic two-pane layout
+    ImGui::Columns(2, "StartMenuColumns", false);
+    ImGui::SetColumnWidth(0, startMenuWidth * 0.6f);
+
+    // Left Pane (Apps)
+    ImGui::Text("Recent Apps");
+    ImGui::Separator();
+    ImGui::Button("Command Prompt", ImVec2(-1, 0));
+    
+    ImGui::NextColumn();
+
+    // Right Pane (Folders & System)
+    ImGui::Text("User");
+    ImGui::Separator();
+    ImGui::Button("Documents", ImVec2(-1, 0));
+
+    ImGui::Columns(1);
+}
+ImGui::End();
+```
+
+### 3. `Taskbar`: The Persistent Navigation Layer
+Anchored to the absolute bottom of the screen, the `Taskbar` provides consistent access to system features. It functions as the primary interaction hub, rendering application icons using `ImGui::ImageButton` and dispatching visibility changes to other components via the `UIManager`.
+
+```cpp
+// Taskbar.cpp - Anchoring to the bottom of the screen
+float taskbarHeight = 60.0f * UIConfig::getScaleFactor();
+ImGui::SetNextWindowPos(ImVec2(0, io.DisplaySize.y - taskbarHeight));
+ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x, taskbarHeight));
+
+// Taskbar.cpp - Dispatching visibility toggle
+if (ImGui::Button("START", ImVec2(100 * scale, 35 * scale))) {
+    UIManager::getInstance().toggleWindow("startMenu");
+}
+```
+
+### 4. `BIOSBootWindow`: Simulated Entry Sequence
+Unlike standard desktop elements, this window operates entirely on a time-based state machine powered by `std::chrono`. It temporarily obscures the rest of the application during launch, sequentially writing mocked diagnostic strings to the screen to simulate a hardware POST operation before revealing the primary interface.
+
+```cpp
+// BIOSBootWindow.cpp - Animating text over time
+auto now = std::chrono::system_clock::now();
+std::chrono::duration<float> elapsed = now - startTime;
+float elapsedSeconds = elapsed.count();
+
+// Renders memory counting up over a 1 second duration
+if (elapsedSeconds > 2.5f) {
+    int memCount = (int)(65536 * ((elapsedSeconds - 2.5f) / 1.0f));
+    if (memCount > 65536) memCount = 65536;
+    ImGui::TextColored(white, "Total Memory: %dMB (DDR6-12800)", memCount);
+}
+```
+
+### 5. `TaskManagerUI`: Telemetry Interface
+This represents the most complex UI structure in the emulator. It handles:
+- **Tabbed Layouts**: Segregating running, waiting, and terminated dummy processes.
+- **Sortable Tables**: Using `ImGui::BeginTable` and `ImGuiTableFlags_Sortable` alongside `std::sort()` to dynamically re-order processes based on column headers.
+- **Hardware Graphical Plotting**: Rendering CPU and Memory mock arrays over time utilizing `ImGui::PlotLines`.
+
+```cpp
+// TaskManagerUI.cpp - Constructing a sortable data table
+if (ImGui::BeginTable("RunningTable", 5, ImGuiTableFlags_Resizable | ImGuiTableFlags_Sortable | ImGuiTableFlags_Borders)) {
+    ImGui::TableSetupColumn("PID");
+    ImGui::TableSetupColumn("Name");
+    ImGui::TableSetupColumn("Core");
+    ImGui::TableSetupColumn("Progress");
+    ImGui::TableSetupColumn("Lines");
+    ImGui::TableHeadersRow();
+    
+    // Sorts internal dummy data array based on user's column click
+    sortProcesses(dummyProcesses, ImGui::TableGetSortSpecs(), TableType::RUNNING);
+
+    for (const auto& process : dummyProcesses) {
+        if (process.state != ProcessState::RUNNING) continue;
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::Text("%d", process.pid);
+        // ... (Render other columns)
+    }
+    ImGui::EndTable();
+}
+```
+
+### 6. `ProcessWindow` & `SearchWindow`: Auxiliary Interface Mockups
+These two classes function as simple floating utility windows. 
+- **`ProcessWindow`**: A placeholder dialog displaying specific metadata (PID, core usage) for a selected process, featuring mocked "Kill" and "Pause" buttons.
+- **`SearchWindow`**: A simplistic search bar interface utilizing `ImGui::InputText`, designed as a future hook for querying the filesystem or registered applications.
+
+```cpp
+// SearchWindow.cpp - Text input buffer
+static char searchBuffer[128] = "";
+ImGui::InputText("Query", searchBuffer, IM_ARRAYSIZE(searchBuffer));
+
+if (ImGui::Button("Search")) {
+    // Placeholder for future query routing
+}
+
+// ProcessWindow.cpp - Mocking active process termination
+if (ImGui::Button("Kill Process")) {
+    isVisible = false; // Mock kill functionality dismisses the window
+}
+```
