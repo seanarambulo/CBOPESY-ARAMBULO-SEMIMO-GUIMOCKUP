@@ -360,28 +360,40 @@ static void sortProcesses(std::vector<DummyProcess>& processes, ImGuiTableSortSp
 
 The graphical desktop environment is constructed by compositing multiple borderless `ImGui` windows carefully anchored to specific screen coordinates. The following outlines how each `AWindow` inherited component operates within the emulator ecosystem:
 
-### 1. `Desktop`: The Immovable Background Anchor
-The `Desktop` acts as the root visual layer. To simulate a static wallpaper without interfering with traditional window dragging, it uses a stringent set of ImGui window flags to remove borders, disable resizing, and prevent it from being brought to the front. The background itself is drawn directly onto the low-level `ImDrawList`.
+### Component 1: The Desktop
+The `Desktop` acts as the full-screen background and base visual layer of the OS, rendering as the very first element each frame to fill the entire application window. To simulate a static environment without interfering with traditional window dragging, it uses a stringent set of ImGui window flags to remove borders, disable resizing, and prevent it from being brought to the front. 
+
+To fulfill system requirements, the Desktop features:
+- **Wallpaper:** A loaded image texture drawn directly onto the low-level `ImDrawList`.
+- **Real-Time Clock:** The current time is fetched and updated every frame, positioned in a fixed corner.
+- **PWR Button:** A dedicated shutdown button that gracefully closes the application by exiting the main loop, rather than forcing a hard crash.
 
 ```cpp
-// Desktop.cpp - inside draw()
+// Desktop.cpp - draw() and drawClock()
 ImGui::SetNextWindowPos(ImVec2(0, 0));
 ImGui::SetNextWindowSize(io.DisplaySize);
 
-// Lock the window completely to act as a background canvas
 ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | 
                          ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | 
                          ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
 
 if (!beginWindow(flags)) return;
 
-// Directly inject a loaded texture or gradient via ImDrawList
+// 1. Draw Background Wallpaper
 if (wallpaperTexture != 0) {
-    ImGui::GetWindowDrawList()->AddImage(
-        (void*)(intptr_t)wallpaperTexture,
-        ImVec2(0, 0), io.DisplaySize
-    );
+    ImGui::GetWindowDrawList()->AddImage((void*)(intptr_t)wallpaperTexture, ImVec2(0, 0), io.DisplaySize);
 }
+
+// 2. Real-Time Clock updated every frame (called via drawClock())
+auto now = std::chrono::system_clock::now();
+std::time_t now_c = std::chrono::system_clock::to_time_t(now);
+std::tm parts;
+localtime_s(&parts, &now_c);
+// ... string formatting ...
+ImGui::SetCursorPos(ImVec2(io.DisplaySize.x - textSize.x - 20, 10)); // Fixed corner
+ImGui::Text("%s", timeStr.c_str());
+
+endWindow();
 ```
 
 ### 2. `StartMenu`: The Dynamic Menu Overlay
@@ -420,8 +432,13 @@ if (ImGui::Begin("StartMenuWindow", nullptr, flags)) {
 ImGui::End();
 ```
 
-### 3. `Taskbar`: The Persistent Navigation Layer
-Anchored to the absolute bottom of the screen, the `Taskbar` provides consistent access to system features. It functions as the primary interaction hub, rendering application icons using `ImGui::ImageButton` and dispatching visibility changes to other components via the `UIManager`.
+### Component 2: The Taskbar
+Anchored as a fixed panel to the absolute bottom of the screen, the `Taskbar` provides consistent access to system functions and active applications. It operates as the primary interaction hub, dispatching visibility state changes to other window components via the centralized `UIManager`. 
+
+The Taskbar is designed with three primary clickable icon buttons:
+- **Start Menu Button:** Toggles a uniquely designed system menu overlay.
+- **Search Button:** Opens a unique UI screen featuring a placeholder system search query interface.
+- **Task Manager Button:** Dedicated specifically to launching the system's telemetry and process management window.
 
 ```cpp
 // Taskbar.cpp - Anchoring to the bottom of the screen
@@ -429,9 +446,23 @@ float taskbarHeight = 60.0f * UIConfig::getScaleFactor();
 ImGui::SetNextWindowPos(ImVec2(0, io.DisplaySize.y - taskbarHeight));
 ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x, taskbarHeight));
 
-// Taskbar.cpp - Dispatching visibility toggle
-if (ImGui::Button("START", ImVec2(100 * scale, 35 * scale))) {
+// Three clickable buttons fulfilling the requirement using a custom DrawIconBtn lambda:
+
+// 1. Unique UI Screen (Start Menu)
+if (DrawIconBtn("btn_start", startIcon, "START", ImVec2(100 * scale, 35 * scale))) {
     UIManager::getInstance().toggleWindow("startMenu");
+}
+ImGui::SameLine();
+
+// 2. Unique UI Screen (Search)
+if (DrawIconBtn("btn_search", searchIcon, "Search")) {
+    UIManager::getInstance().toggleWindow("search");
+}
+ImGui::SameLine();
+
+// 3. Task Manager Button
+if (DrawIconBtn("btn_chart", chartIcon, "Chart")) {
+    UIManager::getInstance().toggleWindow("taskManager");
 }
 ```
 
@@ -452,14 +483,14 @@ if (elapsedSeconds > 2.5f) {
 }
 ```
 
-### 5. `TaskManagerUI`: Telemetry Interface
-This represents the most complex UI structure in the emulator. It handles:
+### Component 3: The Task Manager
+Designed to closely resemble the Windows Task Manager, this window serves as the core telemetry interface and represents the most complex UI structure in the emulator. It handles:
 - **Tabbed Layouts**: Segregating running, waiting, and terminated dummy processes.
 - **Sortable Tables**: Using `ImGui::BeginTable` and `ImGuiTableFlags_Sortable` alongside `std::sort()` to dynamically re-order processes based on column headers.
 - **Hardware Graphical Plotting**: Rendering CPU and Memory mock arrays over time utilizing `ImGui::PlotLines`.
 
 ```cpp
-// TaskManagerUI.cpp - Constructing a sortable data table
+// TaskManagerUI.cpp - Constructing a sortable data table (drawRunningTab)
 if (ImGui::BeginTable("RunningTable", 5, ImGuiTableFlags_Resizable | ImGuiTableFlags_Sortable | ImGuiTableFlags_Borders)) {
     ImGui::TableSetupColumn("PID");
     ImGui::TableSetupColumn("Name");
@@ -468,15 +499,16 @@ if (ImGui::BeginTable("RunningTable", 5, ImGuiTableFlags_Resizable | ImGuiTableF
     ImGui::TableSetupColumn("Lines");
     ImGui::TableHeadersRow();
     
-    // Sorts internal dummy data array based on user's column click
     sortProcesses(dummyProcesses, ImGui::TableGetSortSpecs(), TableType::RUNNING);
 
     for (const auto& process : dummyProcesses) {
         if (process.state != ProcessState::RUNNING) continue;
+        
         ImGui::TableNextRow();
+        
         ImGui::TableSetColumnIndex(0);
         ImGui::Text("%d", process.pid);
-        // ... (Render other columns)
+        // ...
     }
     ImGui::EndTable();
 }
@@ -488,16 +520,23 @@ These two classes function as simple floating utility windows.
 - **`SearchWindow`**: A simplistic search bar interface utilizing `ImGui::InputText`, designed as a future hook for querying the filesystem or registered applications.
 
 ```cpp
-// SearchWindow.cpp - Text input buffer
-static char searchBuffer[128] = "";
-ImGui::InputText("Query", searchBuffer, IM_ARRAYSIZE(searchBuffer));
+// SearchWindow.cpp - draw()
+static char buf[128] = "";
+ImGui::InputText("Query", buf, IM_ARRAYSIZE(buf));
 
 if (ImGui::Button("Search")) {
-    // Placeholder for future query routing
+    // Do nothing for now
 }
 
-// ProcessWindow.cpp - Mocking active process termination
+// ProcessWindow.cpp - draw()
+if (ImGui::Button(isPaused ? "Resume" : "Pause")) {
+    isPaused = !isPaused;
+}
+
+ImGui::SameLine();
+
 if (ImGui::Button("Kill Process")) {
-    isVisible = false; // Mock kill functionality dismisses the window
+    // Mock kill functionality
+    isVisible = false;
 }
 ```
